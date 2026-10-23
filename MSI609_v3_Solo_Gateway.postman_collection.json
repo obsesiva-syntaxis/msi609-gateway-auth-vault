@@ -1,0 +1,381 @@
+{
+  "info": {
+    "name": "MSI609 v3 - Solo Gateway (puerto 8000)",
+    "description": "Matriz de validacion de la guia 2 probada SOLO a traves del gateway (http://localhost:8000). No requiere publicar los puertos 8100 (auth) ni 9000 (backend): funciona con el stack en modo normal (./up.sh). La carpeta 7 (Vault, 127.0.0.1:8200) es opcional. Ejecutar con Collection Runner en orden. Si una corrida se interrumpe, borrar las cookies de localhost en Postman (Cookies > localhost > Delete).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "gateway_url", "value": "http://localhost:8000" },
+    { "key": "vault_url", "value": "http://localhost:8200" },
+    { "key": "vault_token", "value": "dev-only-token" },
+    { "key": "ana_user", "value": "ana" },
+    { "key": "ana_pass", "value": "1234" },
+    { "key": "ernesto_user", "value": "ernesto" },
+    { "key": "ernesto_pass", "value": "admin123" },
+    { "key": "ana_session_token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Salud y cabeceras de seguridad",
+      "item": [
+        {
+          "name": "1.1 GET /health -> 200",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "pm.test('servicio API Gateway', () => pm.expect(pm.response.json().service).to.eql('API Gateway'));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/health", "host": ["{{gateway_url}}"], "path": ["health"] } }
+        },
+        {
+          "name": "1.2 GET / (frontend) -> 200 con cabeceras de seguridad",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "pm.test('sirve HTML', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/html'));",
+            "pm.test('CSP default-src self', () => pm.expect(pm.response.headers.get('Content-Security-Policy')).to.include(\"default-src 'self'\"));",
+            "pm.test('X-Content-Type-Options nosniff', () => pm.expect(pm.response.headers.get('X-Content-Type-Options')).to.eql('nosniff'));",
+            "pm.test('X-Frame-Options DENY', () => pm.expect(pm.response.headers.get('X-Frame-Options')).to.eql('DENY'));",
+            "pm.test('Cache-Control no-store', () => pm.expect(pm.response.headers.get('Cache-Control')).to.include('no-store'));",
+            "pm.test('no revela X-Powered-By', () => pm.expect(pm.response.headers.has('X-Powered-By')).to.eql(false));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/", "host": ["{{gateway_url}}"], "path": [""] } }
+        }
+      ]
+    },
+    {
+      "name": "2. Sin sesion (ejecutar antes de cualquier login)",
+      "item": [
+        {
+          "name": "2.1 GET /auth/me sin cookie -> 401",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "// Intenta limpiar el cookie jar de localhost; si Postman no permite el acceso, se ignora.",
+              "try {",
+              "  const jar = pm.cookies.jar();",
+              "  jar.clear(pm.variables.replaceIn('{{gateway_url}}'), () => {});",
+              "} catch (e) { }"
+            ] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+            ] } }
+          ],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/auth/me", "host": ["{{gateway_url}}"], "path": ["auth", "me"] } }
+        },
+        {
+          "name": "2.2 GET /api/products sin cookie -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/api/products", "host": ["{{gateway_url}}"], "path": ["api", "products"] } }
+        },
+        {
+          "name": "2.3 GET /api/orders sin cookie -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/api/orders", "host": ["{{gateway_url}}"], "path": ["api", "orders"] } }
+        },
+        {
+          "name": "2.4 DELETE /api/products/1 sin cookie -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+          ] } }],
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{gateway_url}}/api/products/1", "host": ["{{gateway_url}}"], "path": ["api", "products", "1"] } }
+        },
+        {
+          "name": "2.5 POST /auth/logout sin cookie -> 200 (idempotente)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));"
+          ] } }],
+          "request": { "method": "POST", "header": [], "url": { "raw": "{{gateway_url}}/auth/logout", "host": ["{{gateway_url}}"], "path": ["auth", "logout"] } }
+        }
+      ]
+    },
+    {
+      "name": "3. Login: validaciones",
+      "item": [
+        {
+          "name": "3.1 Password incorrecta -> 401, sin cookie",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+            "const cookies = pm.response.headers.all().filter(h => h.key.toLowerCase() === 'set-cookie').map(h => h.value);",
+            "pm.test('no se emite session_token', () => pm.expect(cookies.some(c => c.startsWith('session_token='))).to.eql(false));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"username\":\"{{ana_user}}\",\"password\":\"incorrecta\"}" }, "url": { "raw": "{{gateway_url}}/auth/login", "host": ["{{gateway_url}}"], "path": ["auth", "login"] } }
+        },
+        {
+          "name": "3.2 Usuario inexistente -> 401 (mismo codigo que password incorrecta)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"username\":\"nadie\",\"password\":\"1234\"}" }, "url": { "raw": "{{gateway_url}}/auth/login", "host": ["{{gateway_url}}"], "path": ["auth", "login"] } }
+        },
+        {
+          "name": "3.3 Cuerpo sin campos -> 400",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{}" }, "url": { "raw": "{{gateway_url}}/auth/login", "host": ["{{gateway_url}}"], "path": ["auth", "login"] } }
+        },
+        {
+          "name": "3.4 JSON invalido -> 400",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{esto no es json" }, "url": { "raw": "{{gateway_url}}/auth/login", "host": ["{{gateway_url}}"], "path": ["auth", "login"] } }
+        },
+        {
+          "name": "3.5 Origin hostil (defensa CSRF) -> 403, sin cookie",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('403 Forbidden por Origin ajeno', () => pm.response.to.have.status(403));",
+            "const cookies = pm.response.headers.all().filter(h => h.key.toLowerCase() === 'set-cookie').map(h => h.value);",
+            "pm.test('no se emite session_token', () => pm.expect(cookies.some(c => c.startsWith('session_token='))).to.eql(false));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Origin", "value": "http://evil.example" }], "body": { "mode": "raw", "raw": "{\"username\":\"{{ana_user}}\",\"password\":\"{{ana_pass}}\"}" }, "url": { "raw": "{{gateway_url}}/auth/login", "host": ["{{gateway_url}}"], "path": ["auth", "login"] } }
+        }
+      ]
+    },
+    {
+      "name": "4. Flujo de Ana (rol user)",
+      "description": "Postman guarda y reenvia la cookie session_token automaticamente (cookie jar de localhost).",
+      "item": [
+        {
+          "name": "4.1 Login ana -> 200 + cookie HttpOnly SameSite=Lax",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const cookies = pm.response.headers.all().filter(h => h.key.toLowerCase() === 'set-cookie').map(h => h.value);",
+            "const sc = cookies.find(c => c.startsWith('session_token='));",
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "pm.test('cookie session_token emitida', () => pm.expect(sc, 'falta Set-Cookie session_token').to.be.a('string'));",
+            "pm.test('cookie HttpOnly', () => pm.expect(sc).to.match(/httponly/i));",
+            "pm.test('cookie SameSite=Lax', () => pm.expect(sc).to.match(/samesite=lax/i));",
+            "pm.test('el token NO viaja en el cuerpo', () => pm.expect(pm.response.text()).to.not.include('access_token'));",
+            "if (sc) { pm.collectionVariables.set('ana_session_token', sc.split(';')[0].split('=')[1]); }"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"username\":\"{{ana_user}}\",\"password\":\"{{ana_pass}}\"}" }, "url": { "raw": "{{gateway_url}}/auth/login", "host": ["{{gateway_url}}"], "path": ["auth", "login"] } }
+        },
+        {
+          "name": "4.2 GET /auth/me -> 200, ana con rol user",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('username ana', () => pm.expect(b.username).to.eql('ana'));",
+            "pm.test('rol user', () => pm.expect(b.roles).to.include('user'));",
+            "pm.test('sin rol admin', () => pm.expect(b.roles).to.not.include('admin'));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/auth/me", "host": ["{{gateway_url}}"], "path": ["auth", "me"] } }
+        },
+        {
+          "name": "4.3 GET /api/products -> 200 con la identidad propagada al backend",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('devuelve 2 productos', () => pm.expect(b.products).to.have.lengthOf(2));",
+            "pm.test('el backend recibio la identidad de ana', () => pm.expect(b.authenticated_user.username).to.eql('ana'));",
+            "pm.test('el backend vio el rol user', () => pm.expect(b.authenticated_user.roles).to.include('user'));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/api/products", "host": ["{{gateway_url}}"], "path": ["api", "products"] } }
+        },
+        {
+          "name": "4.4 GET /api/orders -> 200",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "pm.test('devuelve 2 ordenes', () => pm.expect(pm.response.json().orders).to.have.lengthOf(2));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/api/orders", "host": ["{{gateway_url}}"], "path": ["api", "orders"] } }
+        },
+        {
+          "name": "4.5 GET /api/products con cabeceras de identidad FALSIFICADAS -> el backend sigue viendo a ana",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "// El gateway construye cabeceras nuevas e ignora las X-Authenticated-* del cliente.",
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('identidad = la de la sesion, no la falsificada', () => pm.expect(b.authenticated_user.username).to.eql('ana'));",
+            "pm.test('rol falsificado admin NO llega al backend', () => pm.expect(b.authenticated_user.roles).to.not.include('admin'));"
+          ] } }],
+          "request": { "method": "GET", "header": [{ "key": "X-Authenticated-Username", "value": "ernesto" }, { "key": "X-Authenticated-User", "value": "USR-003" }, { "key": "X-Authenticated-Roles", "value": "user,admin" }], "url": { "raw": "{{gateway_url}}/api/products", "host": ["{{gateway_url}}"], "path": ["api", "products"] } }
+        },
+        {
+          "name": "4.6 DELETE /api/products/1 como user -> 403",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('403 Forbidden (autenticado pero sin permiso)', () => pm.response.to.have.status(403));"
+          ] } }],
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{gateway_url}}/api/products/1", "host": ["{{gateway_url}}"], "path": ["api", "products", "1"] } }
+        },
+        {
+          "name": "4.7 DELETE con cabeceras de rol FALSIFICADAS -> 403",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('403: el cliente no puede elevarse a admin', () => pm.response.to.have.status(403));"
+          ] } }],
+          "request": { "method": "DELETE", "header": [{ "key": "X-Authenticated-Roles", "value": "user,admin" }, { "key": "X-Authenticated-User", "value": "USR-003" }, { "key": "X-Authenticated-Username", "value": "ernesto" }], "url": { "raw": "{{gateway_url}}/api/products/1", "host": ["{{gateway_url}}"], "path": ["api", "products", "1"] } }
+        },
+        {
+          "name": "4.8 GET /api/noexiste -> 404 (ruta no expuesta)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/api/noexiste", "host": ["{{gateway_url}}"], "path": ["api", "noexiste"] } }
+        },
+        {
+          "name": "4.9 POST /api/products -> 404 (metodo fuera de la politica)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('404: el gateway solo enruta lo declarado', () => pm.response.to.have.status(404));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"name\":\"X\"}" }, "url": { "raw": "{{gateway_url}}/api/products", "host": ["{{gateway_url}}"], "path": ["api", "products"] } }
+        },
+        {
+          "name": "4.10 Path traversal /api/../health (400 o 404 aceptables)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "// Postman puede normalizar ../ antes de enviar; ambos resultados son seguros.",
+            "pm.test('bloqueado (400 o 404)', () => pm.expect([400, 404]).to.include(pm.response.code));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/api/../health", "host": ["{{gateway_url}}"], "path": ["api", "..", "health"] } }
+        },
+        {
+          "name": "4.11 POST /auth/logout -> 200 y cookie eliminada",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "const cookies = pm.response.headers.all().filter(h => h.key.toLowerCase() === 'set-cookie').map(h => h.value);",
+            "const sc = cookies.find(c => c.startsWith('session_token='));",
+            "pm.test('el gateway invalida la cookie (vacia o expirada)', () => pm.expect(sc, 'falta Set-Cookie de borrado').to.be.a('string').and.match(/session_token=;|max-age=0|expires=/i));"
+          ] } }],
+          "request": { "method": "POST", "header": [], "url": { "raw": "{{gateway_url}}/auth/logout", "host": ["{{gateway_url}}"], "path": ["auth", "logout"] } }
+        },
+        {
+          "name": "4.12 GET /auth/me tras logout -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/auth/me", "host": ["{{gateway_url}}"], "path": ["auth", "me"] } }
+        },
+        {
+          "name": "4.13 REVOCACION REAL: reutilizar el token viejo de ana por cabecera Cookie -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "// Si el logout solo hubiera borrado la cookie del navegador, este token seguiria vivo en el servidor.",
+            "pm.test('el token revocado ya no es valido', () => pm.response.to.have.status(401));"
+          ] } }],
+          "request": { "method": "GET", "header": [{ "key": "Cookie", "value": "session_token={{ana_session_token}}" }], "url": { "raw": "{{gateway_url}}/auth/me", "host": ["{{gateway_url}}"], "path": ["auth", "me"] } }
+        }
+      ]
+    },
+    {
+      "name": "5. Flujo de Ernesto (rol admin)",
+      "item": [
+        {
+          "name": "5.1 Login ernesto -> 200 + cookie HttpOnly",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const cookies = pm.response.headers.all().filter(h => h.key.toLowerCase() === 'set-cookie').map(h => h.value);",
+            "const sc = cookies.find(c => c.startsWith('session_token='));",
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "pm.test('cookie HttpOnly', () => pm.expect(sc).to.be.a('string').and.match(/httponly/i));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"username\":\"{{ernesto_user}}\",\"password\":\"{{ernesto_pass}}\"}" }, "url": { "raw": "{{gateway_url}}/auth/login", "host": ["{{gateway_url}}"], "path": ["auth", "login"] } }
+        },
+        {
+          "name": "5.2 GET /auth/me -> 200, roles user y admin",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('username ernesto', () => pm.expect(b.username).to.eql('ernesto'));",
+            "pm.test('rol admin', () => pm.expect(b.roles).to.include('admin'));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/auth/me", "host": ["{{gateway_url}}"], "path": ["auth", "me"] } }
+        },
+        {
+          "name": "5.3 GET /api/products -> 200 con identidad de ernesto",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "pm.test('el backend vio a ernesto', () => pm.expect(pm.response.json().authenticated_user.username).to.eql('ernesto'));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/api/products", "host": ["{{gateway_url}}"], "path": ["api", "products"] } }
+        },
+        {
+          "name": "5.4 DELETE /api/products/1 como admin -> 200",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK (admin autorizado)', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('borra el producto 1', () => pm.expect(b.deleted).to.eql(1));",
+            "pm.test('registrado por ernesto', () => pm.expect(b.deleted_by).to.eql('ernesto'));"
+          ] } }],
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{gateway_url}}/api/products/1", "host": ["{{gateway_url}}"], "path": ["api", "products", "1"] } }
+        },
+        {
+          "name": "5.5 DELETE /api/products/999 -> 404 (autorizado, pero no existe)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+          ] } }],
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{gateway_url}}/api/products/999", "host": ["{{gateway_url}}"], "path": ["api", "products", "999"] } }
+        },
+        {
+          "name": "5.6 DELETE /api/products/abc -> 404 (no coincide con la politica)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+          ] } }],
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{gateway_url}}/api/products/abc", "host": ["{{gateway_url}}"], "path": ["api", "products", "abc"] } }
+        },
+        {
+          "name": "5.7 POST /auth/logout -> 200",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));"
+          ] } }],
+          "request": { "method": "POST", "header": [], "url": { "raw": "{{gateway_url}}/auth/logout", "host": ["{{gateway_url}}"], "path": ["auth", "logout"] } }
+        },
+        {
+          "name": "5.8 GET /auth/me tras logout -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{gateway_url}}/auth/me", "host": ["{{gateway_url}}"], "path": ["auth", "me"] } }
+        }
+      ]
+    },
+    {
+      "name": "6. Sesion invalida",
+      "description": "Manuales, no automatizables aqui: con 'docker compose stop auth', GET /auth/me con una sesion valida debe responder 503; con 'docker compose stop backend', GET /api/products con sesion valida debe responder 502; con 'docker compose stop vault', cualquier ruta protegida debe responder 503.",
+      "item": [
+        {
+          "name": "6.1 Cookie inventada en /auth/me -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+          ] } }],
+          "request": { "method": "GET", "header": [{ "key": "Cookie", "value": "session_token=valor-inventado-123" }], "url": { "raw": "{{gateway_url}}/auth/me", "host": ["{{gateway_url}}"], "path": ["auth", "me"] } }
+        },
+        {
+          "name": "6.2 Cookie inventada en /api/products -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+          ] } }],
+          "request": { "method": "GET", "header": [{ "key": "Cookie", "value": "session_token=valor-inventado-123" }], "url": { "raw": "{{gateway_url}}/api/products", "host": ["{{gateway_url}}"], "path": ["api", "products"] } }
+        },
+        {
+          "name": "6.3 Cookie vacia -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+          ] } }],
+          "request": { "method": "GET", "header": [{ "key": "Cookie", "value": "session_token=" }], "url": { "raw": "{{gateway_url}}/auth/me", "host": ["{{gateway_url}}"], "path": ["auth", "me"] } }
+        }
+      ]
+    },
+    {
+      "name": "7. Vault (OPCIONAL, requiere 127.0.0.1:8200)",
+      "item": [
+        {
+          "name": "7.1 Leer secret/gateway -> solo los secretos de servicio",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "const d = pm.response.json().data.data;",
+            "pm.test('contiene backend_shared_secret', () => pm.expect(d).to.have.property('backend_shared_secret'));",
+            "pm.test('contiene auth_introspection_secret', () => pm.expect(d).to.have.property('auth_introspection_secret'));",
+            "pm.test('ya no existe client_token (se elimino el token estatico)', () => pm.expect(d).to.not.have.property('client_token'));"
+          ] } }],
+          "request": { "method": "GET", "header": [{ "key": "X-Vault-Token", "value": "{{vault_token}}" }], "url": { "raw": "{{vault_url}}/v1/secret/data/gateway", "host": ["{{vault_url}}"], "path": ["v1", "secret", "data", "gateway"] } }
+        },
+        {
+          "name": "7.2 Leer sin token de Vault -> 400/403",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Vault rechaza (400 o 403)', () => pm.expect([400, 403]).to.include(pm.response.code));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{vault_url}}/v1/secret/data/gateway", "host": ["{{vault_url}}"], "path": ["v1", "secret", "data", "gateway"] } }
+        }
+      ]
+    }
+  ]
+}

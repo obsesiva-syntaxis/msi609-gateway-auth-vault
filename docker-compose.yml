@@ -1,0 +1,61 @@
+services:
+  vault:
+    image: hashicorp/vault
+    cap_add: [IPC_LOCK]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN}
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD-SHELL", "VAULT_ADDR=http://127.0.0.1:8200 vault status"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  vault-init:
+    image: hashicorp/vault
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        (vault audit list | grep -q '^file/' || vault audit enable file file_path=stdout) &&
+        vault kv put secret/gateway backend_shared_secret="${BACKEND_SECRET}" auth_introspection_secret="${AUTH_INTROSPECTION_SECRET}"
+    restart: "no"
+
+  backend:
+    build: ./backend
+    environment:
+      INTERNAL_GATEWAY_SECRET: ${BACKEND_SECRET}
+
+  auth:
+    build: ./auth
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN}
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+  gateway:
+    build: ./gateway
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN}
+      BACKEND_URL: http://backend:9000
+      AUTH_URL: http://auth:8100
+      ALLOWED_ORIGINS: http://localhost:8000,http://127.0.0.1:8000
+      COOKIE_SECURE: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+      auth:
+        condition: service_started

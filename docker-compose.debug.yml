@@ -1,0 +1,9 @@
+# Solo para pruebas manuales: publica auth y backend en localhost.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.debug.yml up -d
+services:
+  auth:
+    ports:
+      - "127.0.0.1:8100:8100"
+  backend:
+    ports:
+      - "127.0.0.1:9000:9000"
